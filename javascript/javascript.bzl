@@ -35,6 +35,10 @@ load(
     _babel_register_toolchains = "babel_register_toolchains",
 )
 load(
+    "//tools/eslint:eslint.bzl",
+    _eslint_register_toolchains = "eslint_register_toolchains",
+)
+load(
     "//tools/webpack:webpack.bzl",
     _webpack_register_toolchains = "webpack_register_toolchains",
 )
@@ -56,6 +60,7 @@ def _version(kwargs, prefix):
 def javascript_register_toolchains(**kwargs):
     toolchains = dict(
         babel = _babel_register_toolchains,
+        eslint = _eslint_register_toolchains,
         node = _node_register_toolchains,
         webpack = _webpack_register_toolchains,
         typescript = _typescript_register_toolchains,
