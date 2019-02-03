@@ -23,6 +23,10 @@ javascript_register_toolchains()
 """
 
 load(
+    "//javascript/internal:providers.bzl",
+    _JavaScriptInfo = "JavaScriptInfo",
+)
+load(
     "//javascript/node:node.bzl",
     _node_register_toolchains = "node_register_toolchains",
 )
@@ -63,3 +67,43 @@ def javascript_register_toolchains(**kwargs):
             if key.startswith(kwarg_prefix + "_"):
                 register_kwargs[key[len(kwarg_prefix) + 1:]] = value
         register(**register_kwargs)
+
+# region Build Rules {{{
+
+def _js_library(ctx):
+    # TODO: adjust 'module_name' based on {strip_,}import_prefix
+    module_name = "{}/{}".format(ctx.label.package, ctx.label.name)
+
+    direct_deps = [dep[_JavaScriptInfo] for dep in ctx.attr.deps]
+    transitive_deps = depset(
+        direct = direct_deps,
+        transitive = [
+            dep_js.transitive_deps
+            for dep_js in direct_deps
+        ],
+    )
+
+    return _JavaScriptInfo(
+        src = ctx.file.src,
+        module_name = module_name,
+        direct_deps = depset(direct_deps),
+        transitive_deps = transitive_deps,
+    )
+
+js_library = rule(
+    _js_library,
+    attrs = {
+        "src": attr.label(
+            allow_single_file = [".js"],
+            mandatory = True,
+        ),
+        "deps": attr.label_list(
+            providers = [_JavaScriptInfo],
+        ),
+        "import_prefix": attr.string(),
+        "strip_import_prefix": attr.string(),
+    },
+    provides = [_JavaScriptInfo],
+)
+
+# endregion }}}
