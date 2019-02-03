@@ -56,3 +56,18 @@ yarn_install(
             output = "archives/" + filename,
             sha256 = sha256,
         )
+
+ConfigSettings = provider()
+
+def _config_settings(ctx):
+    return ConfigSettings(
+        compilation_mode = ctx.attr.compilation_mode,
+    )
+
+config_settings = rule(
+    _config_settings,
+    attrs = {
+        "compilation_mode": attr.string(),
+    },
+    provides = [ConfigSettings],
+)

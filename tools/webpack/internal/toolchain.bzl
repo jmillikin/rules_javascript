@@ -21,7 +21,9 @@ WebpackToolchainInfo = provider(fields = ["files", "vars", "webpack_executable"]
 def _webpack_toolchain_info(ctx):
     webpack_js = "{}/{}".format(ctx.file.node_modules.path, ctx.attr.webpack_js)
     toolchain = WebpackToolchainInfo(
-        webpack_executable = webpack_js,
+        webpack_executable = struct(
+            path = webpack_js,
+        ),
         files = depset(ctx.files.node_modules),
         vars = {"WEBPACK": webpack_js},
     )
