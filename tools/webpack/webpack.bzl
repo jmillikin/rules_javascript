@@ -24,7 +24,7 @@ load(
 )
 load(
     "//javascript/internal:util.bzl",
-    _vendor_node_modules = "vendor_node_modules",
+    _vendor_yarn_modules = "vendor_yarn_modules",
 )
 load(
     "//tools/webpack/internal:toolchain.bzl",
@@ -184,7 +184,9 @@ def _webpack_repository(ctx):
     version = ctx.attr.version
     _check_version(version)
     vendor_dir = "@rules_javascript//tools/webpack/internal:webpack_v" + version
-    _vendor_node_modules(ctx, vendor_dir)
+    _vendor_yarn_modules(ctx, vendor_dir, bins = {
+        "webpack": "webpack-cli/bin/cli.js",
+    })
 
 webpack_repository = repository_rule(
     _webpack_repository,

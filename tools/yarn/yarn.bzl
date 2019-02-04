@@ -15,6 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load(
+    "//javascript/internal:providers.bzl",
+    _NodeModulesInfo = "NodeModulesInfo",
+)
+load(
     "//javascript/node:node.bzl",
     _node_common = "node_common",
 )
@@ -90,11 +94,11 @@ def _yarn_install(ctx):
         # OK
         pass
     elif "node_modules/" in modules_folder:
-        # Imports will be resolved relative to a subdirectory of this target,
+        # Imports will be resolved relative to the top of this target,
         # which will cause confusing error messages. Reject the name.
         fail("Yarn can't install to a target containing \"node_modules/\"" +
              ' (try name = "FOO/node_modules", or just name = "node_modules")')
-    elif not modules_folder.endswith("/node_modules"):
+    elif modules_folder.endswith("/node_modules"):
         # OK
         pass
     else:
@@ -137,12 +141,18 @@ def _yarn_install(ctx):
         "--modules-folder=" + node_modules.path,
     ])
 
-    inputs = depset([
-        ctx.file.package_json,
-        ctx.file.yarn_lock,
-        ctx.file._yarn_install,
-        wrapper_params_file,
-    ]) + ctx.files.archives + node_toolchain.files + yarn_toolchain.files
+    inputs = depset(
+        direct = ctx.files.archives + [
+            ctx.file.package_json,
+            ctx.file.yarn_lock,
+            ctx.file._yarn_install,
+            wrapper_params_file,
+        ],
+        transitive = [
+            node_toolchain.files,
+            yarn_toolchain.files,
+        ],
+    )
 
     ctx.actions.run(
         inputs = inputs,
@@ -153,7 +163,10 @@ def _yarn_install(ctx):
         progress_message = "Yarn install {}".format(ctx.file.package_json.owner),
     )
 
-    return DefaultInfo(files = depset([node_modules]))
+    return [
+        DefaultInfo(files = depset([node_modules])),
+        _NodeModulesInfo(node_modules = node_modules),
+    ]
 
 yarn_install = rule(
     _yarn_install,
@@ -180,6 +193,10 @@ yarn_install = rule(
             default = "//tools/yarn:toolchain",
         ),
     },
+    provides = [
+        DefaultInfo,
+        _NodeModulesInfo,
+    ],
 )
 
 # endregion }}}
@@ -234,6 +251,7 @@ def _yarn_urls(registries, package):
 
 def _yarn_modules(ctx):
     ctx.file("WORKSPACE", "workspace(name = {name})\n".format(name = repr(ctx.name)))
+
     ctx.symlink(ctx.attr.package_json, "package.json")
     ctx.symlink(ctx.attr.yarn_lock, "yarn.lock")
 
@@ -243,7 +261,7 @@ def _yarn_modules(ctx):
 
     for package in _parse_yarn_lock(cat_cmd.stdout):
         urls = _yarn_urls(ctx.attr.registries, package)
-        ctx.report_progress("Fetching {}".format(urls[0]))
+        ctx.report_progress("Fetching {}".format(package["filename"]))
         ctx.download(
             url = urls,
             output = "archives/" + package["filename"],
@@ -255,15 +273,28 @@ def _yarn_modules(ctx):
     ctx.file("BUILD.bazel", """
 load("@rules_javascript//tools/yarn:yarn.bzl", "yarn_install")
 yarn_install(
-    name = {name},
+    name = "node_modules",
     package_json = "package.json",
     yarn_lock = "yarn.lock",
     archives = glob(["archives/*.tgz"]),
     visibility = ["//visibility:public"],
 )
-""".format(
-        name = repr(ctx.name),
-    ))
+""")
+    if ctx.attr.bins:
+        ctx.file("bin/BUILD.bazel", """
+load("@rules_javascript//javascript:javascript.bzl", "js_binary")
+[js_binary(
+    name = bin_name,
+    src = bin_name + "_main.js",
+    deps = ["//:node_modules"],
+    visibility = ["//visibility:public"],
+) for bin_name in {bin_names}]
+""".format(bin_names = repr(sorted(ctx.attr.bins))))
+
+    for (bin_name, bin_main_js) in ctx.attr.bins.items():
+        ctx.file("bin/{}_main.js".format(bin_name), "require(({}).path)".format(
+            struct(path = "../node_modules/" + bin_main_js).to_json(),
+        ))
 
 yarn_modules = repository_rule(
     _yarn_modules,
@@ -279,6 +310,7 @@ yarn_modules = repository_rule(
         "registries": attr.string_list(
             default = _node_common.NPM_REGISTRIES,
         ),
+        "bins": attr.string_dict(),
     },
 )
 
@@ -299,7 +331,20 @@ def _yarn_repository(ctx):
     }, executable = False)
 
     ctx.file("WORKSPACE", "workspace(name = {name})\n".format(name = repr(ctx.name)))
-    ctx.file("BUILD.bazel", 'exports_files(["lib/cli.js"])')
+    ctx.file("BUILD.bazel", """
+filegroup(
+    name = "cli_js",
+    srcs = ["lib/cli.js"],
+    visibility = ["//bin:__pkg__"],
+)
+""")
+    ctx.file("bin/BUILD.bazel", """
+load("@rules_javascript//javascript:javascript.bzl", "js_binary")
+js_binary(
+    name = "yarn",
+    src = "//:cli_js",
+    visibility = ["//visibility:public"],
+)""")
 
 yarn_repository = repository_rule(
     _yarn_repository,

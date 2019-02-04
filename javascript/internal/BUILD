@@ -1,5 +1,7 @@
 load(":util.bzl", "config_settings")
 
+exports_files(["js_binary.tmpl.js"])
+
 config_setting(
     name = "compilation_mode_dbg",
     values = {"compilation_mode": "dbg"},

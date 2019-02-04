@@ -19,36 +19,35 @@ load(
     _JavaScriptInfo = "JavaScriptInfo",
 )
 load(
+    "//javascript/internal:util.bzl",
+    _vendor_yarn_modules = "vendor_yarn_modules",
+)
+load(
     "//javascript/node:node.bzl",
     _node_common = "node_common",
 )
 load(
     "//typescript/internal:toolchain.bzl",
     _TOOLCHAIN_TYPE = "TOOLCHAIN_TYPE",
-    _ToolchainInfo = "TypescriptToolchainInfo",
+    _ToolchainInfo = "TypeScriptToolchainInfo",
 )
 
 # region Versions {{{
 
-def _urls(filename):
-    return [registry + filename for registry in _node_common.NPM_REGISTRIES]
-
 _LATEST = "3.2.4"
-
-_VERSION_URLS = {
-    "3.2.4": {
-        "urls": _urls("typescript/-/typescript-3.2.4.tgz"),
-        "sha256": "4f19aecb8092697c727d063ead0446b09947092b802be2e77deb57c33e06fdad",
-    },
-}
+_VERSIONS = ["3.2.4"]
 
 def _check_version(version):
-    if version not in _VERSION_URLS:
-        fail("Typescript version {} not supported by rules_javascript".format(repr(version)))
+    if version not in _VERSIONS:
+        fail("TypeScript version {} not supported by rules_javascript".format(repr(version)))
 
 # endregion }}}
 
-# region Toolchain {{{
+typescript_common = struct(
+    VERSIONS = _VERSIONS,
+    ToolchainInfo = _ToolchainInfo,
+    TOOLCHAIN_TYPE = _TOOLCHAIN_TYPE,
+)
 
 def typescript_register_toolchains(version = _LATEST):
     _check_version(version)
@@ -60,26 +59,16 @@ def typescript_register_toolchains(version = _LATEST):
         )
     native.register_toolchains("@rules_javascript//typescript/toolchains:v{}".format(version))
 
-# endregion }}}
-
-typescript_common = struct(
-    VERSIONS = list(_VERSION_URLS),
-    ToolchainInfo = _ToolchainInfo,
-    TOOLCHAIN_TYPE = _TOOLCHAIN_TYPE,
-)
-
 # region Build Rules {{{
 
 _TypeScriptInfo = provider()
 
-def _tsc_declarations(ctx, node_toolchain, typescript_toolchain, tsconfig_file, wrapper_params_file, dep_declarations):
+def _tsc_declarations(ctx, typescript_toolchain, tsconfig_file, wrapper_params_file, dep_declarations):
     declarations = ctx.actions.declare_file("{}.d.ts".format(ctx.attr.name))
     declarations_map = ctx.actions.declare_file("{}.d.ts.map".format(ctx.attr.name))
 
     args = ctx.actions.args()
     args.add_all([
-        "--",
-        ctx.file._tsc_wrapper.path,
         wrapper_params_file.path,
         typescript_toolchain.tsc_executable.path,
         "--declaration",
@@ -93,7 +82,6 @@ def _tsc_declarations(ctx, node_toolchain, typescript_toolchain, tsconfig_file, 
     inputs = depset(
         direct = [ctx.file.src, tsconfig_file, wrapper_params_file],
         transitive = [
-            node_toolchain.files,
             typescript_toolchain.files,
             depset(dep_declarations),
             depset(ctx.files._tsc_wrapper),
@@ -101,24 +89,22 @@ def _tsc_declarations(ctx, node_toolchain, typescript_toolchain, tsconfig_file, 
     )
 
     ctx.actions.run(
-        executable = node_toolchain.node_executable,
+        executable = ctx.executable._tsc_wrapper,
         arguments = [args],
         inputs = inputs,
         outputs = [declarations, declarations_map],
-        mnemonic = "Typescript",
+        mnemonic = "TypeScriptCheck",
         progress_message = "Typechecking {}".format(ctx.label),
     )
 
     return (declarations, declarations_map)
 
-def _tsc_compile(ctx, node_toolchain, typescript_toolchain, tsconfig_file, wrapper_params_file, dep_declarations):
+def _tsc_compile(ctx, typescript_toolchain, tsconfig_file, wrapper_params_file, dep_declarations):
     js_source = ctx.actions.declare_file("{}.js".format(ctx.attr.name))
     js_source_map = ctx.actions.declare_file("{}.js.map".format(ctx.attr.name))
 
     args = ctx.actions.args()
     args.add_all([
-        "--",
-        ctx.file._tsc_wrapper.path,
         wrapper_params_file.path,
         typescript_toolchain.tsc_executable.path,
         "--sourceMap",
@@ -130,7 +116,6 @@ def _tsc_compile(ctx, node_toolchain, typescript_toolchain, tsconfig_file, wrapp
     inputs = depset(
         direct = [ctx.file.src, tsconfig_file, wrapper_params_file],
         transitive = [
-            node_toolchain.files,
             typescript_toolchain.files,
             depset(dep_declarations),
             depset(ctx.files._tsc_wrapper),
@@ -138,18 +123,17 @@ def _tsc_compile(ctx, node_toolchain, typescript_toolchain, tsconfig_file, wrapp
     )
 
     ctx.actions.run(
-        executable = node_toolchain.node_executable,
+        executable = ctx.executable._tsc_wrapper,
         arguments = [args],
         inputs = inputs,
         outputs = [js_source, js_source_map],
-        mnemonic = "Typescript",
+        mnemonic = "TypeScriptCompile",
         progress_message = "Compiling {}".format(ctx.label),
     )
 
     return (js_source, js_source_map)
 
 def _ts_library(ctx):
-    node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
     typescript_toolchain = ctx.attr._typescript_toolchain[typescript_common.ToolchainInfo]
 
     # TODO: adjust 'module_name' based on {strip_,}import_prefix
@@ -168,7 +152,6 @@ def _ts_library(ctx):
 
     (declarations, declarations_map) = _tsc_declarations(
         ctx = ctx,
-        node_toolchain = node_toolchain,
         typescript_toolchain = typescript_toolchain,
         tsconfig_file = tsconfig_file,
         wrapper_params_file = wrapper_params_file,
@@ -177,7 +160,6 @@ def _ts_library(ctx):
 
     (js_source, js_source_map) = _tsc_compile(
         ctx = ctx,
-        node_toolchain = node_toolchain,
         typescript_toolchain = typescript_toolchain,
         tsconfig_file = tsconfig_file,
         wrapper_params_file = wrapper_params_file,
@@ -208,6 +190,13 @@ def _ts_library(ctx):
     ctx.actions.write(wrapper_params_file, wrapper_params.to_json())
 
     js_direct_deps = [dep[_JavaScriptInfo] for dep in ctx.attr.deps]
+    js_transitive_srcs = depset(
+        direct = [js_source],
+        transitive = [
+            dep_js.transitive_srcs
+            for dep_js in js_direct_deps
+        ],
+    )
     js_transitive_deps = depset(
         direct = js_direct_deps,
         transitive = [
@@ -227,6 +216,7 @@ def _ts_library(ctx):
             src = js_source,
             module_name = module_name,
             direct_deps = depset(js_direct_deps),
+            transitive_srcs = js_transitive_srcs,
             transitive_deps = js_transitive_deps,
         ),
         _TypeScriptInfo(
@@ -251,15 +241,13 @@ ts_library = rule(
         "import_prefix": attr.string(),
         "strip_import_prefix": attr.string(),
         "tsc_options": attr.string_list(),
-        "_node_toolchain": attr.label(
-            default = "//javascript/node:toolchain",
-        ),
         "_typescript_toolchain": attr.label(
             default = "//typescript:toolchain",
         ),
         "_tsc_wrapper": attr.label(
-            default = "//typescript/internal:tsc_wrapper.js",
-            allow_single_file = True,
+            default = "//typescript/internal:tsc_wrapper",
+            executable = True,
+            cfg = "host",
         ),
     },
     provides = [_JavaScriptInfo, _TypeScriptInfo],
@@ -272,24 +260,17 @@ ts_library = rule(
 def _typescript_repository(ctx):
     version = ctx.attr.version
     _check_version(version)
-    source = _VERSION_URLS[version]
-
-    ctx.download_and_extract(
-        url = source["urls"],
-        sha256 = source["sha256"],
-        stripPrefix = "package",
-    )
-
-    ctx.file("WORKSPACE", "workspace(name = {name})\n".format(name = repr(ctx.name)))
-    ctx.symlink(ctx.attr._overlay_BUILD, "BUILD.bazel")
+    vendor_dir = "@rules_javascript//typescript/internal:typescript_v" + version
+    _vendor_yarn_modules(ctx, vendor_dir, bins = {
+        "tsc": "typescript/lib/tsc.js",
+    })
 
 typescript_repository = repository_rule(
     _typescript_repository,
     attrs = {
         "version": attr.string(mandatory = True),
-        "_overlay_BUILD": attr.label(
-            default = "//typescript/internal:typescript.BUILD",
-            single_file = True,
+        "registries": attr.string_list(
+            default = _node_common.NPM_REGISTRIES,
         ),
     },
 )

@@ -14,16 +14,28 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+load(
+    "//javascript/node:node.bzl",
+    _node_common = "node_common",
+)
+
 TOOLCHAIN_TYPE = "@rules_javascript//tools/babel:toolchain_type"
 
 BabelToolchainInfo = provider(fields = ["files", "vars", "babel_executable"])
 
 def _babel_toolchain_info(ctx):
-    babel_js = "{}/{}".format(ctx.file.node_modules.path, ctx.attr.babel_js)
+    node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
+    runfiles = ctx.attr.babel[DefaultInfo].default_runfiles.files
     toolchain = BabelToolchainInfo(
-        babel_executable = babel_js,
-        files = depset(ctx.files.node_modules),
-        vars = {"BABEL": babel_js},
+        babel_executable = ctx.executable.babel,
+        files = depset(
+            direct = [ctx.executable.babel],
+            transitive = [
+                runfiles,
+                node_toolchain.files,
+            ],
+        ),
+        vars = {"BABEL": ctx.executable.babel.path},
     )
     return [
         platform_common.ToolchainInfo(babel_toolchain = toolchain),
@@ -33,11 +45,14 @@ def _babel_toolchain_info(ctx):
 babel_toolchain_info = rule(
     _babel_toolchain_info,
     attrs = {
-        "node_modules": attr.label(
+        "babel": attr.label(
             mandatory = True,
-            single_file = True,
+            executable = True,
+            cfg = "host",
         ),
-        "babel_js": attr.string(),
+        "_node_toolchain": attr.label(
+            default = "//javascript/node:toolchain",
+        ),
     },
     provides = [
         platform_common.ToolchainInfo,

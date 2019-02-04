@@ -7,5 +7,5 @@ exports_files(["yarn_install.js"])
     name = "toolchain_v{}".format(version),
     tags = ["manual"],
     visibility = ["//visibility:public"],
-    yarn_js = "@yarn_v{}//:lib/cli.js".format(version),
+    yarn = "@yarn_v{}//bin:yarn".format(version),
 ) for version in yarn_common.VERSIONS]

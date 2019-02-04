@@ -26,7 +26,30 @@ def _urls(registries, url):
         return out
     return [url]
 
-def vendor_node_modules(ctx, vendor_dir):
+_VENDOR_BUILD = """
+load("@rules_javascript//tools/yarn:yarn.bzl", "yarn_install")
+yarn_install(
+    name = "node_modules",
+    package_json = "package.json",
+    yarn_lock = "yarn.lock",
+    archives = glob(["archives/*.tgz"]),
+    visibility = ["//visibility:public"],
+)
+"""
+
+_VENDOR_BIN_BUILD = """
+load("@rules_javascript//javascript:javascript.bzl", "js_binary")
+[js_binary(
+    name = bin_name,
+    src = bin_name + "_main.js",
+    deps = ["//:node_modules"],
+    visibility = ["//visibility:public"],
+) for bin_name in {bin_names}]
+"""
+
+def vendor_yarn_modules(ctx, vendor_dir, bins = {}):
+    ctx.file("WORKSPACE", "workspace(name = {name})\n".format(name = repr(ctx.name)))
+
     ctx.symlink(Label(vendor_dir + "/package.json"), "package.json")
     ctx.symlink(Label(vendor_dir + "/shasums.txt"), "shasums.txt")
     ctx.symlink(Label(vendor_dir + "/yarn.lock"), "yarn.lock")
@@ -36,18 +59,6 @@ def vendor_node_modules(ctx, vendor_dir):
         fail("Failed to read shasums: {}".format(cat_cmd.stderr))
     ctx.execute(["rm", "shasums.txt"])
 
-    ctx.file("WORKSPACE", "workspace(name = {name})\n".format(name = repr(ctx.name)))
-    ctx.file("BUILD.bazel", """
-load("@rules_javascript//tools/yarn:yarn.bzl", "yarn_install")
-yarn_install(
-    name = "node_modules",
-    package_json = "package.json",
-    yarn_lock = "yarn.lock",
-    archives = glob(["archives/*.tgz"]),
-    visibility = ["//visibility:public"],
-)
-""")
-
     for line in cat_cmd.stdout.strip().split("\n"):
         (sha256, filename, url) = line.split("")
         ctx.report_progress("Fetching {}".format(filename))
@@ -55,6 +66,21 @@ yarn_install(
             url = _urls(ctx.attr.registries, url),
             output = "archives/" + filename,
             sha256 = sha256,
+        )
+
+    ctx.file("BUILD.bazel", _VENDOR_BUILD)
+    if bins:
+        ctx.file("bin/BUILD.bazel", _VENDOR_BIN_BUILD.format(
+            bin_names = repr(sorted(bins)),
+        ))
+
+    for (bin_name, bin_main_js) in bins.items():
+        ctx.file(
+            "bin/{}_main.js".format(bin_name),
+            "require(({main}).path);".format(
+                repo = struct(path = ctx.name).to_json(),
+                main = struct(path = bin_main_js).to_json(),
+            ),
         )
 
 ConfigSettings = provider()

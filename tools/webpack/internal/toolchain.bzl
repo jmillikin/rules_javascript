@@ -14,18 +14,28 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+load(
+    "//javascript/node:node.bzl",
+    _node_common = "node_common",
+)
+
 TOOLCHAIN_TYPE = "@rules_javascript//tools/webpack:toolchain_type"
 
 WebpackToolchainInfo = provider(fields = ["files", "vars", "webpack_executable"])
 
 def _webpack_toolchain_info(ctx):
-    webpack_js = "{}/{}".format(ctx.file.node_modules.path, ctx.attr.webpack_js)
+    node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
+    runfiles = ctx.attr.webpack[DefaultInfo].default_runfiles.files
     toolchain = WebpackToolchainInfo(
-        webpack_executable = struct(
-            path = webpack_js,
+        webpack_executable = ctx.executable.webpack,
+        files = depset(
+            direct = [ctx.executable.webpack],
+            transitive = [
+                runfiles,
+                node_toolchain.files,
+            ],
         ),
-        files = depset(ctx.files.node_modules),
-        vars = {"WEBPACK": webpack_js},
+        vars = {"WEBPACK": ctx.executable.webpack.path},
     )
     return [
         platform_common.ToolchainInfo(webpack_toolchain = toolchain),
@@ -35,11 +45,14 @@ def _webpack_toolchain_info(ctx):
 webpack_toolchain_info = rule(
     _webpack_toolchain_info,
     attrs = {
-        "node_modules": attr.label(
+        "webpack": attr.label(
             mandatory = True,
-            single_file = True,
+            executable = True,
+            cfg = "host",
         ),
-        "webpack_js": attr.string(),
+        "_node_toolchain": attr.label(
+            default = "//javascript/node:toolchain",
+        ),
     },
     provides = [
         platform_common.ToolchainInfo,

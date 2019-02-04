@@ -20,7 +20,7 @@ load(
 )
 load(
     "//javascript/internal:util.bzl",
-    _vendor_node_modules = "vendor_node_modules",
+    _vendor_yarn_modules = "vendor_yarn_modules",
 )
 load(
     "//tools/babel/internal:toolchain.bzl",
@@ -61,7 +61,9 @@ def _babel_repository(ctx):
     version = ctx.attr.version
     _check_version(version)
     vendor_dir = "@rules_javascript//tools/babel/internal:babel_v" + version
-    _vendor_node_modules(ctx, vendor_dir)
+    _vendor_yarn_modules(ctx, vendor_dir, bins = {
+        "babel": "@babel/cli/bin/babel.js",
+    })
 
 babel_repository = repository_rule(
     _babel_repository,

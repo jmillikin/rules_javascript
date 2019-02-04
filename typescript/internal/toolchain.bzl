@@ -14,15 +14,28 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+load(
+    "//javascript/node:node.bzl",
+    _node_common = "node_common",
+)
+
 TOOLCHAIN_TYPE = "@rules_javascript//typescript:toolchain_type"
 
-TypescriptToolchainInfo = provider(fields = ["files", "vars", "tsc_executable"])
+TypeScriptToolchainInfo = provider(fields = ["files", "vars", "tsc_executable"])
 
 def _typescript_toolchain_info(ctx):
-    toolchain = TypescriptToolchainInfo(
-        tsc_executable = ctx.file.tsc_js,
-        files = depset([ctx.file.tsc_js]) + ctx.files.tsc_files,
-        vars = {"TSC": ctx.file.tsc_js.path},
+    node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
+    runfiles = ctx.attr.tsc[DefaultInfo].default_runfiles.files
+    toolchain = TypeScriptToolchainInfo(
+        tsc_executable = ctx.executable.tsc,
+        files = depset(
+            direct = [ctx.executable.tsc],
+            transitive = [
+                runfiles,
+                node_toolchain.files,
+            ],
+        ),
+        vars = {"TSC": ctx.executable.tsc.path},
     )
     return [
         platform_common.ToolchainInfo(typescript_toolchain = toolchain),
@@ -32,10 +45,14 @@ def _typescript_toolchain_info(ctx):
 typescript_toolchain_info = rule(
     _typescript_toolchain_info,
     attrs = {
-        "tsc_js": attr.label(
-            allow_single_file = [".js"],
+        "tsc": attr.label(
+            mandatory = True,
+            executable = True,
+            cfg = "host",
         ),
-        "tsc_files": attr.label(),
+        "_node_toolchain": attr.label(
+            default = "//javascript/node:toolchain",
+        ),
     },
     provides = [
         platform_common.ToolchainInfo,
@@ -56,7 +73,7 @@ typescript_toolchain_alias = rule(
     toolchains = [TOOLCHAIN_TYPE],
     provides = [
         DefaultInfo,
-        TypescriptToolchainInfo,
+        TypeScriptToolchainInfo,
         platform_common.TemplateVariableInfo,
     ],
 )

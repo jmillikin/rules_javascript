@@ -14,15 +14,28 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+load(
+    "//javascript/node:node.bzl",
+    _node_common = "node_common",
+)
+
 TOOLCHAIN_TYPE = "@rules_javascript//tools/yarn:toolchain_type"
 
 YarnToolchainInfo = provider(fields = ["files", "vars", "yarn_executable"])
 
 def _yarn_toolchain_info(ctx):
+    node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
+    runfiles = ctx.attr.yarn[DefaultInfo].default_runfiles.files
     toolchain = YarnToolchainInfo(
-        yarn_executable = ctx.file.yarn_js,
-        files = depset([ctx.file.yarn_js]),
-        vars = {"YARN": ctx.file.yarn_js.path},
+        yarn_executable = ctx.executable.yarn,
+        files = depset(
+            direct = [ctx.executable.yarn],
+            transitive = [
+                runfiles,
+                node_toolchain.files,
+            ],
+        ),
+        vars = {"YARN": ctx.executable.yarn.path},
     )
     return [
         platform_common.ToolchainInfo(yarn_toolchain = toolchain),
@@ -32,9 +45,13 @@ def _yarn_toolchain_info(ctx):
 yarn_toolchain_info = rule(
     _yarn_toolchain_info,
     attrs = {
-        "yarn_js": attr.label(
+        "yarn": attr.label(
             mandatory = True,
-            allow_single_file = [".js"],
+            executable = True,
+            cfg = "host",
+        ),
+        "_node_toolchain": attr.label(
+            default = "//javascript/node:toolchain",
         ),
     },
     provides = [

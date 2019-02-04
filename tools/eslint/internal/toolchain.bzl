@@ -14,18 +14,28 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+load(
+    "//javascript/node:node.bzl",
+    _node_common = "node_common",
+)
+
 TOOLCHAIN_TYPE = "@rules_javascript//tools/eslint:toolchain_type"
 
 EslintToolchainInfo = provider(fields = ["files", "vars", "eslint_executable"])
 
 def _eslint_toolchain_info(ctx):
-    eslint_js = "{}/{}".format(ctx.file.node_modules.path, ctx.attr.eslint_js)
+    node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
+    runfiles = ctx.attr.eslint[DefaultInfo].default_runfiles.files
     toolchain = EslintToolchainInfo(
-        eslint_executable = struct(
-            path = eslint_js,
+        eslint_executable = ctx.executable.eslint,
+        files = depset(
+            direct = [ctx.executable.eslint],
+            transitive = [
+                runfiles,
+                node_toolchain.files,
+            ],
         ),
-        files = depset(ctx.files.node_modules),
-        vars = {"ESLINT": eslint_js},
+        vars = {"ESLINT": ctx.executable.eslint.path},
     )
     return [
         platform_common.ToolchainInfo(eslint_toolchain = toolchain),
@@ -35,11 +45,14 @@ def _eslint_toolchain_info(ctx):
 eslint_toolchain_info = rule(
     _eslint_toolchain_info,
     attrs = {
-        "node_modules": attr.label(
+        "eslint": attr.label(
             mandatory = True,
-            single_file = True,
+            executable = True,
+            cfg = "host",
         ),
-        "eslint_js": attr.string(),
+        "_node_toolchain": attr.label(
+            default = "//javascript/node:toolchain",
+        ),
     },
     provides = [
         platform_common.ToolchainInfo,

@@ -25,9 +25,11 @@ javascript_register_toolchains()
 load(
     "//javascript/internal:providers.bzl",
     _JavaScriptInfo = "JavaScriptInfo",
+    _NodeModulesInfo = "NodeModulesInfo",
 )
 load(
     "//javascript/node:node.bzl",
+    _node_common = "node_common",
     _node_register_toolchains = "node_register_toolchains",
 )
 load(
@@ -80,6 +82,13 @@ def _js_library(ctx):
     module_name = "{}/{}".format(ctx.label.package, ctx.label.name)
 
     direct_deps = [dep[_JavaScriptInfo] for dep in ctx.attr.deps]
+    transitive_srcs = depset(
+        direct = ctx.files.src,
+        transitive = [
+            dep_js.transitive_srcs
+            for dep_js in direct_deps
+        ],
+    )
     transitive_deps = depset(
         direct = direct_deps,
         transitive = [
@@ -92,6 +101,7 @@ def _js_library(ctx):
         src = ctx.file.src,
         module_name = module_name,
         direct_deps = depset(direct_deps),
+        transitive_srcs = transitive_srcs,
         transitive_deps = transitive_deps,
     )
 
@@ -109,6 +119,74 @@ js_library = rule(
         "strip_import_prefix": attr.string(),
     },
     provides = [_JavaScriptInfo],
+)
+
+def _js_binary(ctx):
+    node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
+
+    node_path = []
+    node_modules = []
+    for dep in ctx.attr.deps:
+        if _NodeModulesInfo in dep:
+            dep_modules = dep[_NodeModulesInfo].node_modules
+            node_modules.append(dep_modules)
+            node_path.append(dep_modules.path)
+
+    transitive_srcs = depset(
+        transitive = [
+            dep[_JavaScriptInfo].transitive_srcs
+            for dep in ctx.attr.deps
+            if _JavaScriptInfo in dep
+        ],
+    )
+
+    ctx.actions.expand_template(
+        template = ctx.file._launcher_template,
+        output = ctx.outputs.executable,
+        substitutions = {
+            "{NODE_EXECUTABLE}": node_toolchain.node_executable.path,
+            "{JS_BINARY_CONFIG}": struct(
+                node_path = node_path,
+                node_args = ctx.attr.node_options,
+                main = ctx.file.src.path,
+                workspace_name = ctx.workspace_name,
+            ).to_json(),
+        },
+        is_executable = True,
+    )
+
+    return DefaultInfo(
+        runfiles = ctx.runfiles(
+            files = [ctx.file.src] + node_modules,
+            transitive_files = depset(transitive = [
+                transitive_srcs,
+                node_toolchain.files,
+            ]),
+        ),
+    )
+
+js_binary = rule(
+    _js_binary,
+    executable = True,
+    attrs = {
+        "src": attr.label(
+            allow_single_file = [".js"],
+        ),
+        "deps": attr.label_list(
+            providers = [
+                [_JavaScriptInfo],
+                [_NodeModulesInfo],
+            ],
+        ),
+        "node_options": attr.string_list(),
+        "_launcher_template": attr.label(
+            default = "//javascript/internal:js_binary.tmpl.js",
+            allow_single_file = True,
+        ),
+        "_node_toolchain": attr.label(
+            default = "//javascript/node:toolchain",
+        ),
+    },
 )
 
 # endregion }}}
