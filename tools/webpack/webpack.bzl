@@ -23,17 +23,14 @@ load(
     _node_common = "node_common",
 )
 load(
-    "//javascript/internal:util.bzl",
-    _vendor_yarn_modules = "vendor_yarn_modules",
+    "//tools/yarn/internal:yarn_vendor.bzl",
+    _yarn_vendor_modules = "yarn_vendor_modules",
 )
 load(
     "//tools/webpack/internal:toolchain.bzl",
+    _WebpackConfigInfo = "WebpackConfigInfo",
     _TOOLCHAIN_TYPE = "TOOLCHAIN_TYPE",
     _ToolchainInfo = "WebpackToolchainInfo",
-)
-load(
-    "@rules_javascript//javascript/internal:util.bzl",
-    _ConfigSettings = "ConfigSettings",
 )
 
 # region Versions {{{
@@ -47,10 +44,46 @@ def _check_version(version):
 
 # endregion }}}
 
+def _bundle(ctx_actions, webpack_toolchain, webpack_config, entries, output_file, *, webpack_arguments = []):
+    inputs = depset(
+        direct = entries,
+        transitive = [
+            webpack_toolchain.files,
+            webpack_config.files,
+        ],
+    )
+    argv = ctx_actions.args()
+    argv.add_all([
+        "--config=" + webpack_config.webpack_config_file.path,
+        "--output-filename=" + output_file.path,
+        "--display=errors-only",
+    ])
+    argv.add_all([
+        "--entry=./" + entry.path
+        for entry in entries
+    ])
+    argv.add_all(webpack_arguments)
+
+    if len(entries) == 1:
+        progress_message = "Webpack {}".format(entries[0].short_path)
+    else:
+        progress_message = "Webpack {}".format([entry.short_path for entry in entries])
+
+    ctx_actions.run(
+        inputs = inputs,
+        outputs = [output_file],
+        executable = webpack_toolchain.webpack_executable,
+        arguments = [argv],
+        mnemonic = "Webpack",
+        progress_message = progress_message,
+    )
+
 webpack_common = struct(
     VERSIONS = _VERSIONS,
     ToolchainInfo = _ToolchainInfo,
     TOOLCHAIN_TYPE = _TOOLCHAIN_TYPE,
+    WebpackConfigInfo = _WebpackConfigInfo,
+    bundle = _bundle,
 )
 
 def webpack_register_toolchains(version = _LATEST):
@@ -69,8 +102,7 @@ def _webpack_bundle(ctx):
     node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
     webpack_toolchain = ctx.attr._webpack_toolchain[webpack_common.ToolchainInfo]
 
-    settings = ctx.attr._config_settings[_ConfigSettings]
-    if settings.compilation_mode == "opt":
+    if ctx.var["COMPILATION_MODE"] == "opt":
         webpack_mode = "production"
     else:
         webpack_mode = "development"
@@ -164,9 +196,6 @@ webpack_bundle = rule(
             allow_single_file = True,
             default = "//tools/webpack/internal:webpack_config.tmpl.js",
         ),
-        "_config_settings": attr.label(
-            default = "//javascript/internal:config_settings",
-        ),
         "_node_toolchain": attr.label(
             default = "//javascript/node:toolchain",
         ),
@@ -184,9 +213,14 @@ def _webpack_repository(ctx):
     version = ctx.attr.version
     _check_version(version)
     vendor_dir = "@rules_javascript//tools/webpack/internal:webpack_v" + version
-    _vendor_yarn_modules(ctx, vendor_dir, bins = {
-        "webpack": "webpack-cli/bin/cli.js",
-    })
+    _yarn_vendor_modules(
+        ctx,
+        vendor_dir,
+        tools = {
+            "webpack": "webpack-cli/bin/cli.js",
+        },
+        modules = ["webpack"],
+    )
 
 webpack_repository = repository_rule(
     _webpack_repository,

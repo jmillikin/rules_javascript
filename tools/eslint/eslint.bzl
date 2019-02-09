@@ -19,8 +19,8 @@ load(
     _node_common = "node_common",
 )
 load(
-    "//javascript/internal:util.bzl",
-    _vendor_yarn_modules = "vendor_yarn_modules",
+    "//tools/yarn/internal:yarn_vendor.bzl",
+    _yarn_vendor_modules = "yarn_vendor_modules",
 )
 load(
     "//tools/eslint/internal:toolchain.bzl",
@@ -61,7 +61,7 @@ def _eslint_repository(ctx):
     version = ctx.attr.version
     _check_version(version)
     vendor_dir = "@rules_javascript//tools/eslint/internal:eslint_v" + version
-    _vendor_yarn_modules(ctx, vendor_dir, bins = {
+    _yarn_vendor_modules(ctx, vendor_dir, tools = {
         "eslint": "eslint/bin/eslint.js",
     })
 

@@ -17,11 +17,19 @@
 load(
     "//javascript/internal:providers.bzl",
     _JavaScriptInfo = "JavaScriptInfo",
-    _NodeModulesInfo = "NodeModulesInfo",
+    _JavaScriptModuleInfo = "JavaScriptModuleInfo",
 )
 load(
-    "//javascript/internal:util.bzl",
-    _vendor_yarn_modules = "vendor_yarn_modules",
+    "//tools/babel:babel.bzl",
+    _babel_common = "babel_common",
+)
+load(
+    "//tools/yarn/internal:yarn_vendor.bzl",
+    _yarn_vendor_modules = "yarn_vendor_modules",
+)
+load(
+    "//tools/webpack:webpack.bzl",
+    _webpack_common = "webpack_common",
 )
 load(
     "//javascript/node:node.bzl",
@@ -62,14 +70,20 @@ def typescript_register_toolchains(version = _LATEST):
 
 # region Build Rules {{{
 
-_TypeScriptInfo = provider()
+_TypeScriptInfo = provider(fields = ["direct_sources", "direct_modules"])
+
+_TypeScriptModuleInfo = provider(fields = ["name", "files", "declarations", "declarations_map", "source"])
 
 def _tsc_declarations(ctx, typescript_toolchain, tsconfig_file, wrapper_params_file, dep_declarations):
+    node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
+
     declarations = ctx.actions.declare_file("{}.d.ts".format(ctx.attr.name))
     declarations_map = ctx.actions.declare_file("{}.d.ts.map".format(ctx.attr.name))
 
     args = ctx.actions.args()
     args.add_all([
+        "--",
+        ctx.file._tsc_wrapper.path,
         wrapper_params_file.path,
         typescript_toolchain.tsc_executable.path,
         "--declaration",
@@ -90,7 +104,7 @@ def _tsc_declarations(ctx, typescript_toolchain, tsconfig_file, wrapper_params_f
     )
 
     ctx.actions.run(
-        executable = ctx.executable._tsc_wrapper,
+        executable = node_toolchain.node_executable,
         arguments = [args],
         inputs = inputs,
         outputs = [declarations, declarations_map],
@@ -101,11 +115,15 @@ def _tsc_declarations(ctx, typescript_toolchain, tsconfig_file, wrapper_params_f
     return (declarations, declarations_map)
 
 def _tsc_compile(ctx, typescript_toolchain, tsconfig_file, wrapper_params_file, dep_declarations):
+    node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
+
     js_source = ctx.actions.declare_file("{}.js".format(ctx.attr.name))
     js_source_map = ctx.actions.declare_file("{}.js.map".format(ctx.attr.name))
 
     args = ctx.actions.args()
     args.add_all([
+        "--",
+        ctx.file._tsc_wrapper.path,
         wrapper_params_file.path,
         typescript_toolchain.tsc_executable.path,
         "--sourceMap",
@@ -124,7 +142,7 @@ def _tsc_compile(ctx, typescript_toolchain, tsconfig_file, wrapper_params_file, 
     )
 
     ctx.actions.run(
-        executable = ctx.executable._tsc_wrapper,
+        executable = node_toolchain.node_executable,
         arguments = [args],
         inputs = inputs,
         outputs = [js_source, js_source_map],
@@ -146,10 +164,12 @@ def _ts_common(ctx):
     importable_paths = {}
     dep_declarations = []
     for dep in ctx.attr.deps:
-        dep_js = dep[_JavaScriptInfo]
+        if _TypeScriptInfo not in dep:
+            continue
         dep_ts = dep[_TypeScriptInfo]
-        importable_paths[dep_js.module_name] = [dep_ts.declarations.path]
-        dep_declarations.append(dep_ts.declarations)
+        for dep_ts_mod in dep_ts.direct_modules:
+            importable_paths[dep_ts_mod.name] = [dep_ts_mod.declarations.path]
+            dep_declarations.append(dep_ts_mod.declarations)
 
     (declarations, declarations_map) = _tsc_declarations(
         ctx = ctx,
@@ -201,20 +221,26 @@ def _ts_common(ctx):
 def _ts_library(ctx):
     common = _ts_common(ctx)
 
-    js_direct_deps = [dep[_JavaScriptInfo] for dep in ctx.attr.deps]
-    js_transitive_srcs = depset(
-        direct = [common.js_source],
-        transitive = [
-            dep_js.transitive_srcs
-            for dep_js in js_direct_deps
-        ],
+    js_deps = [dep[_JavaScriptInfo] for dep in ctx.attr.deps]
+
+    js_module = _JavaScriptModuleInfo(
+        name = common.module_name,
+        files = depset([common.js_source]),
+        source = struct(
+            path = common.js_source.path,
+            short_path = common.js_source.short_path,
+        ),
     )
-    js_transitive_deps = depset(
-        direct = js_direct_deps,
-        transitive = [
-            dep_js.transitive_deps
-            for dep_js in js_direct_deps
-        ],
+
+    ts_module = _TypeScriptModuleInfo(
+        name = common.module_name,
+        files = depset(ctx.files.src),
+        declarations = common.declarations,
+        declarations_map = common.declarations_map,
+        source = struct(
+            path = ctx.file.src.path,
+            short_path = ctx.file.src.short_path,
+        ),
     )
 
     return [
@@ -225,16 +251,20 @@ def _ts_library(ctx):
             common.declarations_map,
         ])),
         _JavaScriptInfo(
-            src = common.js_source,
-            module_name = common.module_name,
-            direct_deps = depset(js_direct_deps),
-            transitive_srcs = js_transitive_srcs,
-            transitive_deps = js_transitive_deps,
+            direct_modules = [js_module],
+            direct_sources = js_module.files,
+            transitive_sources = depset(
+                direct = [common.js_source],
+                transitive = [dep.transitive_sources for dep in js_deps],
+            ),
+            transitive_modules = depset(
+                direct = [js_module],
+                transitive = [dep.transitive_modules for dep in js_deps],
+            ),
         ),
         _TypeScriptInfo(
-            src = ctx.files.src,
-            declarations = common.declarations,
-            declarations_map = common.declarations_map,
+            direct_modules = [ts_module],
+            direct_sources = ctx.files.src,
         ),
     ]
 
@@ -246,69 +276,186 @@ ts_library = rule(
         ),
         "deps": attr.label_list(
             providers = [
-                # [_JavaScriptInfo],
+                [_JavaScriptInfo],
                 [_JavaScriptInfo, _TypeScriptInfo],
-                # [_NodeModulesInfo],
             ],
         ),
         "import_prefix": attr.string(),
         "strip_import_prefix": attr.string(),
         "tsc_options": attr.string_list(),
+        "_node_toolchain": attr.label(
+            default = "//javascript/node:toolchain",
+        ),
         "_typescript_toolchain": attr.label(
             default = "//typescript:toolchain",
         ),
         "_tsc_wrapper": attr.label(
-            default = "//typescript/internal:tsc_wrapper",
-            executable = True,
-            cfg = "host",
+            default = "//typescript/internal:tsc_wrapper.js",
+            allow_single_file = True,
         ),
     },
     provides = [_JavaScriptInfo, _TypeScriptInfo],
 )
 
-def _ts_binary(ctx):
-    common = _ts_common(ctx)
+def _ts_binary_babel(ctx, dep_modules):
+    babel_toolchain = ctx.attr._babel_toolchain[_babel_common.ToolchainInfo]
 
+    babel_config_file = ctx.actions.declare_file("_babel/{}/config.js".format(
+        ctx.attr.name,
+    ))
+    preset_env = _babel_common.preset(
+        babel_toolchain.babel_modules["@babel/preset-env"],
+        {"targets": {"node": "current"}},
+    )
+    preset_typescript = _babel_common.preset(
+        babel_toolchain.babel_modules["@babel/preset-typescript"],
+    )
+    babel_config = _babel_common.create_config(
+        ctx.actions,
+        babel_toolchain = babel_toolchain,
+        output_file = babel_config_file,
+        presets = [preset_env, preset_typescript],
+    )
+
+    babel_modules = []
+    for dep_module in dep_modules:
+        babel_out = ctx.actions.declare_file("_babel_out/{}/{}.js".format(
+            ctx.attr.name,
+            dep_module.name,
+        ))
+        babel_modules.append(_JavaScriptModuleInfo(
+            name = dep_module.name,
+            files = depset(direct = [babel_out]),
+            source = struct(
+                path = babel_out.path,
+                short_path = babel_out.short_path,
+            ),
+        ))
+        _babel_common.compile(
+            ctx.actions,
+            babel_toolchain = babel_toolchain,
+            babel_config = babel_config,
+            module = dep_module,
+            output_file = babel_out,
+            babel_arguments = ctx.attr.babel_options,
+        )
+
+    babel_out = ctx.actions.declare_file("_babel_out/{}/{}".format(
+        ctx.attr.name,
+        ctx.file.src.short_path.replace(".ts", ".js"),
+    ))
+    main_babel_out = babel_out
+    _babel_common.compile(
+        ctx.actions,
+        babel_toolchain = babel_toolchain,
+        babel_config = babel_config,
+        module = _JavaScriptModuleInfo(
+            files = depset(direct = ctx.files.src),
+            source = ctx.file.src,
+        ),
+        output_file = babel_out,
+        babel_arguments = ctx.attr.babel_options,
+    )
+
+    return struct(
+        main_js = main_babel_out,
+        modules = babel_modules,
+    )
+
+_TS_BINARY_WEBPACK_CONFIG = """
+const path = require("path");
+const webpack = require(path.resolve(process.cwd(), CONFIG.webpack));
+let resolve_aliases = {};
+CONFIG.resolve_aliases.forEach(item => {
+    resolve_aliases[item[0]] = path.resolve(process.cwd(), item[1]);
+});
+module.exports = {
+    mode: "production",
+    target: "node",
+    plugins: [new webpack.BannerPlugin({
+        banner: "/*! NODE_EXECUTABLE */",
+        raw: true,
+        entryOnly: true,
+    })],
+    output: { path: process.cwd() },
+    resolve: { alias: resolve_aliases },
+};
+"""
+
+def _ts_binary_webpack(ctx, babel_out):
+    webpack_toolchain = ctx.attr._webpack_toolchain[_webpack_common.ToolchainInfo]
+
+    webpack_config_file = ctx.actions.declare_file("_webpack/{}/config.js".format(ctx.attr.name))
+    ctx.actions.write(
+        webpack_config_file,
+        "const CONFIG = {};".format(struct(
+            webpack = webpack_toolchain.webpack_modules["webpack"].source.path,
+            resolve_aliases = [[mod.name, mod.source.path] for mod in babel_out.modules],
+        ).to_json()) + _TS_BINARY_WEBPACK_CONFIG,
+    )
+    webpack_config = _webpack_common.WebpackConfigInfo(
+        webpack_config_file = webpack_config_file,
+        files = depset(
+            direct = [webpack_config_file],
+            transitive = [mod.files for mod in babel_out.modules],
+        ),
+    )
+
+    webpack_out = ctx.actions.declare_file("_webpack_out/{}/bundle.js".format(ctx.attr.name))
+    _webpack_common.bundle(
+        ctx.actions,
+        webpack_toolchain = webpack_toolchain,
+        webpack_config = webpack_config,
+        entries = [babel_out.main_js],
+        output_file = webpack_out,
+            webpack_arguments = ctx.attr.webpack_options,
+    )
+
+    return struct(
+        bundle_js = webpack_out,
+    )
+
+def _ts_binary(ctx):
     node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
 
-    node_path = []
-    node_modules = []
-    for dep in ctx.attr.deps:
-        if _NodeModulesInfo in dep:
-            dep_modules = dep[_NodeModulesInfo].node_modules
-            node_modules.append(dep_modules)
-            node_path.append(dep_modules.path)
-
-    transitive_srcs = depset(
+    dep_modules = depset(
         transitive = [
-            dep[_JavaScriptInfo].transitive_srcs
+            dep[_JavaScriptInfo].transitive_modules
             for dep in ctx.attr.deps
-            if _JavaScriptInfo in dep
         ],
     )
 
+    babel_out = _ts_binary_babel(ctx, dep_modules)
+    webpack_out = _ts_binary_webpack(ctx, babel_out)
+
+    out_plain = ctx.actions.declare_file(ctx.attr.name)
+    out_exec = ctx.actions.declare_file(ctx.attr.name + ".hermetic.js")
+
     ctx.actions.expand_template(
-        template = ctx.file._launcher_template,
-        output = ctx.outputs.executable,
+        template = webpack_out.bundle_js,
+        output = out_plain,
         substitutions = {
-            "{NODE_EXECUTABLE}": node_toolchain.node_executable.path,
-            "{JS_BINARY_CONFIG}": struct(
-                node_path = node_path,
-                node_args = ctx.attr.node_options,
-                main = common.js_source.short_path,
-                workspace_name = ctx.workspace_name,
-            ).to_json(),
+            "/*! NODE_EXECUTABLE */": "#!/usr/bin/env node\n",
         },
         is_executable = True,
     )
 
+    ctx.actions.expand_template(
+        template = webpack_out.bundle_js,
+        output = out_exec,
+        substitutions = {
+            "/*! NODE_EXECUTABLE */": "#!{}\n".format(
+                node_toolchain.node_executable.path,
+            ),
+        },
+        is_executable = True,
+    )
     return DefaultInfo(
+        files = depset(direct = [out_plain]),
+        executable = out_exec,
         runfiles = ctx.runfiles(
-            files = [common.js_source] + node_modules,
-            transitive_files = depset(transitive = [
-                transitive_srcs,
-                node_toolchain.files,
-            ]),
+            files = ctx.files.src,
+            transitive_files = node_toolchain.files,
         ),
     )
 
@@ -318,30 +465,24 @@ ts_binary = rule(
     attrs = {
         "src": attr.label(
             allow_single_file = [".ts"],
+            mandatory = True,
         ),
         "deps": attr.label_list(
             providers = [
-                # [_JavaScriptInfo],
+                [_JavaScriptInfo],
                 [_JavaScriptInfo, _TypeScriptInfo],
-                [_NodeModulesInfo],
             ],
         ),
-        "node_options": attr.string_list(),
-        "tsc_options": attr.string_list(),
-        "_launcher_template": attr.label(
-            default = "//javascript/internal:js_binary.tmpl.js",
-            allow_single_file = True,
-        ),
+        "babel_options": attr.string_list(),
+        "webpack_options": attr.string_list(),
         "_node_toolchain": attr.label(
             default = "//javascript/node:toolchain",
         ),
-        "_typescript_toolchain": attr.label(
-            default = "//typescript:toolchain",
+        "_babel_toolchain": attr.label(
+            default = "//tools/babel:toolchain",
         ),
-        "_tsc_wrapper": attr.label(
-            default = "//typescript/internal:tsc_wrapper",
-            executable = True,
-            cfg = "host",
+        "_webpack_toolchain": attr.label(
+            default = "//tools/webpack:toolchain",
         ),
     },
 )
@@ -354,7 +495,7 @@ def _typescript_repository(ctx):
     version = ctx.attr.version
     _check_version(version)
     vendor_dir = "@rules_javascript//typescript/internal:typescript_v" + version
-    _vendor_yarn_modules(ctx, vendor_dir, bins = {
+    _yarn_vendor_modules(ctx, vendor_dir, tools = {
         "tsc": "typescript/lib/tsc.js",
     })
 

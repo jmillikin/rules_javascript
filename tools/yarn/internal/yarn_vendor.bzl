@@ -27,27 +27,28 @@ def _urls(registries, url):
     return [url]
 
 _VENDOR_BUILD = """
-load("@rules_javascript//tools/yarn:yarn.bzl", "yarn_install")
+load("@rules_javascript//tools/yarn/internal:yarn_install.bzl", "yarn_install")
 yarn_install(
     name = "node_modules",
     package_json = "package.json",
     yarn_lock = "yarn.lock",
     archives = glob(["archives/*.tgz"]),
+    modules = {modules},
     visibility = ["//visibility:public"],
 )
 """
 
 _VENDOR_BIN_BUILD = """
-load("@rules_javascript//javascript:javascript.bzl", "js_binary")
-[js_binary(
-    name = bin_name,
-    src = bin_name + "_main.js",
-    deps = ["//:node_modules"],
+load("@rules_javascript//tools/yarn/internal:yarn_install.bzl", "yarn_modules_tool")
+[yarn_modules_tool(
+    name = tool_name,
+    main = tool_main,
+    node_modules = "//:node_modules",
     visibility = ["//visibility:public"],
-) for bin_name in {bin_names}]
+) for (tool_name, tool_main) in {tools}]
 """
 
-def vendor_yarn_modules(ctx, vendor_dir, bins = {}):
+def yarn_vendor_modules(ctx, vendor_dir, tools = {}, modules = []):
     ctx.file("WORKSPACE", "workspace(name = {name})\n".format(name = repr(ctx.name)))
 
     ctx.symlink(Label(vendor_dir + "/package.json"), "package.json")
@@ -68,32 +69,10 @@ def vendor_yarn_modules(ctx, vendor_dir, bins = {}):
             sha256 = sha256,
         )
 
-    ctx.file("BUILD.bazel", _VENDOR_BUILD)
-    if bins:
+    ctx.file("BUILD.bazel", _VENDOR_BUILD.format(
+        modules = repr(sorted(modules)),
+    ))
+    if tools:
         ctx.file("bin/BUILD.bazel", _VENDOR_BIN_BUILD.format(
-            bin_names = repr(sorted(bins)),
+            tools = repr(sorted(tools.items())),
         ))
-
-    for (bin_name, bin_main_js) in bins.items():
-        ctx.file(
-            "bin/{}_main.js".format(bin_name),
-            "require(({main}).path);".format(
-                repo = struct(path = ctx.name).to_json(),
-                main = struct(path = bin_main_js).to_json(),
-            ),
-        )
-
-ConfigSettings = provider()
-
-def _config_settings(ctx):
-    return ConfigSettings(
-        compilation_mode = ctx.attr.compilation_mode,
-    )
-
-config_settings = rule(
-    _config_settings,
-    attrs = {
-        "compilation_mode": attr.string(),
-    },
-    provides = [ConfigSettings],
-)

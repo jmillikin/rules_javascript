@@ -16,7 +16,7 @@
 
 load(
     "//javascript/internal:providers.bzl",
-    _NodeModulesInfo = "NodeModulesInfo",
+    _JavaScriptInfo = "NodeModulesInfo",
 )
 load(
     "//javascript/node:node.bzl",
@@ -27,6 +27,7 @@ load(
     _TOOLCHAIN_TYPE = "TOOLCHAIN_TYPE",
     _ToolchainInfo = "YarnToolchainInfo",
 )
+load("//tools/yarn/internal:yarn_install.bzl", "yarn_install")
 
 # region Versions {{{
 
@@ -70,136 +71,6 @@ def yarn_register_toolchains(version = _LATEST):
             version = version,
         )
     native.register_toolchains("@rules_javascript//tools/yarn/toolchains:v{}".format(version))
-
-# region Build Rules {{{
-
-def _archives_map(archives):
-    path_to_basename = {}
-    seen_basenames = {}
-    for archive in archives:
-        basename = archive.basename
-        if basename in seen_basenames:
-            fail("Duplicate archive basename: {}".format(repr(basename)), attr = "archives")
-        seen_basenames[basename] = True
-        path_to_basename[archive.path] = basename
-
-    return {path: path_to_basename[path] for path in sorted(path_to_basename)}
-
-def _yarn_install(ctx):
-    # Node.JS resolves package names relative to the _first_ 'node_modules'
-    # component of the caller's directory. Detect common ways the user can
-    # break their resolution path, and help get close to their intent.
-    modules_folder = ctx.attr.name
-    if modules_folder == "node_modules":
-        # OK
-        pass
-    elif "node_modules/" in modules_folder:
-        # Imports will be resolved relative to the top of this target,
-        # which will cause confusing error messages. Reject the name.
-        fail("Yarn can't install to a target containing \"node_modules/\"" +
-             ' (try name = "FOO/node_modules", or just name = "node_modules")')
-    elif modules_folder.endswith("/node_modules"):
-        # OK
-        pass
-    else:
-        # Fiddle with the output path a bit to get a low-collision name that
-        # ends in a 'node_modules' component.
-        modules_folder = "_yarn/{}/node_modules".format(ctx.attr.name)
-
-    node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
-    yarn_toolchain = ctx.attr._yarn_toolchain[yarn_common.ToolchainInfo]
-
-    wrapper_params = struct(
-        archives = _archives_map(ctx.files.archives),
-        archive_dir = "_yarn_install/offline_mirror",
-        yarnrc = "_yarn_install/yarnrc",
-    )
-
-    wrapper_params_file = ctx.actions.declare_file("_yarn/{}/params.json".format(ctx.attr.name))
-    ctx.actions.write(wrapper_params_file, wrapper_params.to_json())
-
-    node_modules = ctx.actions.declare_directory(modules_folder)
-    outputs = [node_modules]
-
-    argv = ctx.actions.args()
-    argv.add_all([
-        "--",
-        ctx.file._yarn_install.path,
-        wrapper_params_file.path,
-        yarn_toolchain.yarn_executable.path,
-        "install",
-        "--frozen-lockfile",
-        "--no-default-rc",
-        "--offline",
-        "--silent",
-        "--production",
-        "--ignore-scripts",
-        "--no-bin-links",
-        "--use-yarnrc=" + wrapper_params.yarnrc,
-        "--cwd=" + ctx.file.package_json.dirname,
-        "--cache-folder=_yarn_install/cache",
-        "--modules-folder=" + node_modules.path,
-    ])
-
-    inputs = depset(
-        direct = ctx.files.archives + [
-            ctx.file.package_json,
-            ctx.file.yarn_lock,
-            ctx.file._yarn_install,
-            wrapper_params_file,
-        ],
-        transitive = [
-            node_toolchain.files,
-            yarn_toolchain.files,
-        ],
-    )
-
-    ctx.actions.run(
-        inputs = inputs,
-        outputs = outputs,
-        executable = node_toolchain.node_executable,
-        arguments = [argv],
-        mnemonic = "Yarn",
-        progress_message = "Yarn install {}".format(ctx.file.package_json.owner),
-    )
-
-    return [
-        DefaultInfo(files = depset([node_modules])),
-        _NodeModulesInfo(node_modules = node_modules),
-    ]
-
-yarn_install = rule(
-    _yarn_install,
-    attrs = {
-        "package_json": attr.label(
-            allow_single_file = [".json"],
-            mandatory = True,
-        ),
-        "yarn_lock": attr.label(
-            allow_single_file = True,
-            mandatory = True,
-        ),
-        "archives": attr.label_list(
-            allow_files = [".tar.gz", ".tgz"],
-        ),
-        "_node_toolchain": attr.label(
-            default = "//javascript/node:toolchain",
-        ),
-        "_yarn_install": attr.label(
-            default = "//tools/yarn/internal:yarn_install.js",
-            allow_single_file = True,
-        ),
-        "_yarn_toolchain": attr.label(
-            default = "//tools/yarn:toolchain",
-        ),
-    },
-    provides = [
-        DefaultInfo,
-        _NodeModulesInfo,
-    ],
-)
-
-# endregion }}}
 
 # region Repository Rules {{{
 
@@ -249,7 +120,29 @@ def _yarn_urls(registries, package):
 
     return [url]
 
-def _yarn_modules(ctx):
+_YARN_MODULES_BUILD = """
+load("@rules_javascript//tools/yarn:yarn.bzl", "yarn_install")
+yarn_install(
+    name = "node_modules",
+    package_json = "package.json",
+    yarn_lock = "yarn.lock",
+    archives = glob(["archives/*.tgz"]),
+    modules = {modules}
+    visibility = ["//visibility:public"],
+)
+"""
+
+_YARN_MODULES_BIN_BUILD = """
+load("@rules_javascript//tools/yarn/internal:yarn_install.bzl", "yarn_modules_tool")
+[yarn_modules_tool(
+    name = tool_name,
+    main = tool_main,
+    node_modules = "//:node_modules",
+    visibility = ["//visibility:public"],
+) for (tool_name, tool_main) in {tools}]
+"""
+
+def _yarn_node_modules(ctx):
     ctx.file("WORKSPACE", "workspace(name = {name})\n".format(name = repr(ctx.name)))
 
     ctx.symlink(ctx.attr.package_json, "package.json")
@@ -270,34 +163,16 @@ def _yarn_modules(ctx):
             # integrity = package["integrity"]
         )
 
-    ctx.file("BUILD.bazel", """
-load("@rules_javascript//tools/yarn:yarn.bzl", "yarn_install")
-yarn_install(
-    name = "node_modules",
-    package_json = "package.json",
-    yarn_lock = "yarn.lock",
-    archives = glob(["archives/*.tgz"]),
-    visibility = ["//visibility:public"],
-)
-""")
-    if ctx.attr.bins:
-        ctx.file("bin/BUILD.bazel", """
-load("@rules_javascript//javascript:javascript.bzl", "js_binary")
-[js_binary(
-    name = bin_name,
-    src = bin_name + "_main.js",
-    deps = ["//:node_modules"],
-    visibility = ["//visibility:public"],
-) for bin_name in {bin_names}]
-""".format(bin_names = repr(sorted(ctx.attr.bins))))
-
-    for (bin_name, bin_main_js) in ctx.attr.bins.items():
-        ctx.file("bin/{}_main.js".format(bin_name), "require(({}).path)".format(
-            struct(path = "../node_modules/" + bin_main_js).to_json(),
+    ctx.file("BUILD.bazel", _YARN_MODULES_BUILD.format(
+        modules = repr(sorted(ctx.attr.modules)),
+    ))
+    if ctx.attr.tools:
+        ctx.file("bin/BUILD.bazel", _YARN_MODULES_BIN_BUILD.format(
+            tools = repr(sorted(ctx.attr.tools.items())),
         ))
 
-yarn_modules = repository_rule(
-    _yarn_modules,
+yarn_node_modules = repository_rule(
+    _yarn_node_modules,
     attrs = {
         "package_json": attr.label(
             allow_single_file = [".json"],
@@ -310,7 +185,8 @@ yarn_modules = repository_rule(
         "registries": attr.string_list(
             default = _node_common.NPM_REGISTRIES,
         ),
-        "bins": attr.string_dict(),
+        "modules": attr.string_list(),
+        "tools": attr.string_dict(),
     },
 )
 
@@ -339,12 +215,13 @@ filegroup(
 )
 """)
     ctx.file("bin/BUILD.bazel", """
-load("@rules_javascript//javascript:javascript.bzl", "js_binary")
-js_binary(
+load("@rules_javascript//tools/yarn/internal:yarn_install.bzl", "yarn_modules_tool")
+yarn_modules_tool(
     name = "yarn",
-    src = "//:cli_js",
+    main_src = "//:cli_js",
     visibility = ["//visibility:public"],
-)""")
+)
+""")
 
 yarn_repository = repository_rule(
     _yarn_repository,

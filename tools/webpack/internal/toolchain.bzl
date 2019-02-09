@@ -15,19 +15,33 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load(
+    "//javascript/internal:providers.bzl",
+    _JavaScriptInfo = "JavaScriptInfo",
+    _NodeModulesInfo = "NodeModulesInfo",
+)
+load(
     "//javascript/node:node.bzl",
     _node_common = "node_common",
 )
 
 TOOLCHAIN_TYPE = "@rules_javascript//tools/webpack:toolchain_type"
 
-WebpackToolchainInfo = provider(fields = ["files", "vars", "webpack_executable"])
+WebpackConfigInfo = provider(fields = ["files", "webpack_config_file"])
+
+WebpackToolchainInfo = provider(fields = ["files", "vars", "webpack_executable", "webpack_modules"])
 
 def _webpack_toolchain_info(ctx):
     node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
     runfiles = ctx.attr.webpack[DefaultInfo].default_runfiles.files
+
+    webpack_modules = {}
+    node_modules = ctx.attr.node_modules[_JavaScriptInfo]
+    for module in node_modules.direct_modules:
+        webpack_modules[module.name] = module
+
     toolchain = WebpackToolchainInfo(
         webpack_executable = ctx.executable.webpack,
+        webpack_modules = webpack_modules,
         files = depset(
             direct = [ctx.executable.webpack],
             transitive = [
@@ -49,6 +63,10 @@ webpack_toolchain_info = rule(
             mandatory = True,
             executable = True,
             cfg = "host",
+        ),
+        "node_modules": attr.label(
+            mandatory = True,
+            providers = [_JavaScriptInfo, _NodeModulesInfo],
         ),
         "_node_toolchain": attr.label(
             default = "//javascript/node:toolchain",

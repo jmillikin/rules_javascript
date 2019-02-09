@@ -4,6 +4,7 @@ load("@rules_javascript//tools/babel/internal:toolchain.bzl", "babel_toolchain_i
 [babel_toolchain_info(
     name = "toolchain_v{}".format(version),
     babel = "@babel_v{}//bin:babel".format(version),
+    node_modules = "@babel_v{}//:node_modules".format(version),
     tags = ["manual"],
     visibility = ["//visibility:public"],
 ) for version in babel_common.VERSIONS]

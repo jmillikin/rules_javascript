@@ -14,6 +14,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-JavaScriptInfo = provider()
+JavaScriptInfo = provider(fields = ["direct_sources", "transitive_sources", "direct_modules", "transitive_modules"])
+
+JavaScriptModuleInfo = provider(fields = ["name", "files", "source"])
 
 NodeModulesInfo = provider()
