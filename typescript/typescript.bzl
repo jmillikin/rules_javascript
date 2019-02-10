@@ -219,52 +219,62 @@ def _ts_common(ctx):
     )
 
 def _ts_library(ctx):
-    common = _ts_common(ctx)
+    direct_js_modules = []
+    direct_js_sources = []
+    direct_ts_modules = []
+    direct_ts_sources = []
+    out_files = []
+    if ctx.attr.src:
+        common = _ts_common(ctx)
 
-    js_deps = [dep[_JavaScriptInfo] for dep in ctx.attr.deps]
-
-    js_module = _JavaScriptModuleInfo(
-        name = common.module_name,
-        files = depset([common.js_source]),
-        source = struct(
-            path = common.js_source.path,
-            short_path = common.js_source.short_path,
-        ),
-    )
-
-    ts_module = _TypeScriptModuleInfo(
-        name = common.module_name,
-        files = depset(ctx.files.src),
-        declarations = common.declarations,
-        declarations_map = common.declarations_map,
-        source = struct(
-            path = ctx.file.src.path,
-            short_path = ctx.file.src.short_path,
-        ),
-    )
-
-    return [
-        DefaultInfo(files = depset([
+        out_files = [
             common.js_source,
             common.js_source_map,
             common.declarations,
             common.declarations_map,
-        ])),
+        ]
+
+        direct_js_sources.append(common.js_source)
+        direct_js_modules.append(_JavaScriptModuleInfo(
+            name = common.module_name,
+            files = depset(direct_js_sources),
+            source = struct(
+                path = common.js_source.path,
+                short_path = common.js_source.short_path,
+            ),
+        ))
+
+        direct_ts_sources.append(ctx.file.src)
+        direct_ts_modules.append(_TypeScriptModuleInfo(
+            name = common.module_name,
+            files = direct_ts_sources,
+            declarations = common.declarations,
+            declarations_map = common.declarations_map,
+            source = struct(
+                path = ctx.file.src.path,
+                short_path = ctx.file.src.short_path,
+            ),
+        ))
+
+    js_deps = [dep[_JavaScriptInfo] for dep in ctx.attr.deps]
+
+    return [
+        DefaultInfo(files = depset(out_files)),
         _JavaScriptInfo(
-            direct_modules = [js_module],
-            direct_sources = js_module.files,
+            direct_modules = direct_js_modules,
+            direct_sources = depset(direct = direct_js_sources),
             transitive_sources = depset(
-                direct = [common.js_source],
+                direct = direct_js_sources,
                 transitive = [dep.transitive_sources for dep in js_deps],
             ),
             transitive_modules = depset(
-                direct = [js_module],
+                direct = direct_js_modules,
                 transitive = [dep.transitive_modules for dep in js_deps],
             ),
         ),
         _TypeScriptInfo(
-            direct_modules = [ts_module],
-            direct_sources = ctx.files.src,
+            direct_modules = direct_ts_modules,
+            direct_sources = depset(direct = direct_ts_sources),
         ),
     ]
 

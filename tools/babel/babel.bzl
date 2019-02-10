@@ -15,6 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load(
+    "//javascript/internal:providers.bzl",
+    _JavaScriptInfo = "JavaScriptInfo",
+    _JavaScriptModuleInfo = "JavaScriptModuleInfo",
+)
+load(
     "//javascript/node:node.bzl",
     _node_common = "node_common",
 )
@@ -131,6 +136,180 @@ def babel_register_toolchains(version = _LATEST):
             version = version,
         )
     native.register_toolchains("@rules_javascript//tools/babel/toolchains:v{}".format(version))
+
+# region Build Rules {{{
+
+def _module_dir(module_name):
+    idx = module_name.rfind("/")
+    if idx == -1:
+        return module_name
+    return module_name[:idx]
+
+def _babel_config_dummy(ctx):
+    config_file = ctx.actions.declare_file("_babel/{}/config.js".format(
+        ctx.attr.name,
+    ))
+    ctx.actions.write(config_file, """
+const path = require("path");
+const CONFIG = {CONFIG};
+
+let resolve = module.parent.require("resolve");
+const orig_resolve_sync = resolve.sync;
+const babel_dir = path.dirname(module.parent.filename);
+resolve.sync = function(name, opts) {{
+    if (name.startsWith("@babel/")) {{
+        opts.basedir = babel_dir;
+    }}
+    return orig_resolve_sync(name, opts);
+}}
+module.exports = {{
+    extends: path.resolve(process.cwd(), CONFIG.extends),
+}}
+""".format(
+        CONFIG = struct(
+            extends = ctx.file.babel_config.path,
+        ).to_json(),
+    ))
+
+    return _BabelConfigInfo(
+        babel_config_file = config_file,
+        files = depset(
+            direct = [config_file, ctx.file.babel_config],
+        )
+    )
+
+def _babel(ctx):
+    babel_toolchain = ctx.attr._babel_toolchain[_ToolchainInfo]
+
+    if _BabelConfigInfo in ctx.attr.babel_config:
+        babel_config = ctx.attr.babel_config[_BabelConfigInfo]
+    else:
+        babel_config = _babel_config_dummy(ctx)
+
+    js_deps = [dep[_JavaScriptInfo] for dep in ctx.attr.deps]
+    babel_inputs = depset(transitive = [
+        babel_toolchain.files,
+        babel_config.files,
+    ])
+
+    # Running Babel with `--relative --out-dir=./out-root ./src/main.js` will
+    # write output to `./src/out-root/main.js`, which is the exact opposite of
+    # what we want when all the output files are supposed to end up in a
+    # per-target output directory.
+    #
+    # Work around this by splitting inputs by dirname, and implementing the
+    # relative output path calculation ourselves.
+    #
+    # See also:
+    # * https://github.com/babel/babel/issues/8193
+
+    modules_by_dir = {}
+    for dep in js_deps:
+        for module in dep.transitive_modules:
+            module_dir = _module_dir(module.name)
+            modules_by_dir.setdefault(module_dir, []).append(module)
+
+    all_outputs = []
+    out_modules = []
+    for dirname in sorted(modules_by_dir):
+        dir_inputs = []
+        dir_outputs = []
+        dir_modules = modules_by_dir[dirname]
+        for module in dir_modules:
+            module_output = ctx.actions.declare_file("_babel_out/{}/{}.js".format(
+                ctx.attr.name,
+                module.name,
+            ))
+            dir_inputs.append(module.files)
+            dir_outputs.append(module_output)
+            all_outputs.append(module_output)
+            out_modules.append(_JavaScriptModuleInfo(
+                name = module.name,
+                files = depset(direct = [module_output]),
+                source = struct(
+                    path = module_output.path,
+                    short_path = module_output.short_path,
+                )
+            ))
+
+        argv = ctx.actions.args()
+        argv.add_all([
+            "--no-babelrc",
+            "--config-file=./" + babel_config.babel_config_file.path,
+            "--env-name=production",
+            "--source-root=.",
+            "--out-dir=./" + dir_outputs[0].dirname,
+        ])
+        argv.add_all([module.source.path for module in dir_modules])
+        argv.add_all(ctx.attr.babel_options)
+
+        ctx.actions.run(
+            inputs = depset(
+                transitive = [babel_inputs] + dir_inputs,
+            ),
+            outputs = dir_outputs,
+            executable = babel_toolchain.babel_executable,
+            arguments = [argv],
+            mnemonic = "Babel",
+            progress_message = "Babel {} => {}".format(ctx.label, dirname),
+        )
+
+    return [
+        DefaultInfo(files = depset(direct = all_outputs)),
+        _JavaScriptInfo(
+            direct_modules = out_modules,
+            direct_sources = depset(all_outputs),
+            transitive_modules = out_modules,
+            transitive_sources = depset(all_outputs),
+        ),
+    ]
+
+babel = rule(
+    _babel,
+    attrs = {
+        "babel_options": attr.string_list(),
+        "babel_config": attr.label(
+            allow_single_file = [".js"],
+            providers = [_BabelConfigInfo],
+            mandatory = True,
+        ),
+        "deps": attr.label_list(
+            providers = [_JavaScriptInfo],
+        ),
+        "_babel_toolchain": attr.label(
+            default = "//tools/babel:toolchain",
+        ),
+    },
+    provides = [DefaultInfo, _JavaScriptInfo],
+)
+
+def _babel_config(ctx):
+    js_deps = [dep[_JavaScriptInfo] for dep in ctx.attr.deps]
+
+    return _BabelConfigInfo(
+        babel_config_file = ctx.file.src,
+        files = depset(
+            direct = ctx.files.src,
+            transitive = [
+                dep.transitive_sources for dep in js_deps
+            ],
+        )
+    )
+
+babel_config = rule(
+    _babel_config,
+    attrs = {
+        "src": attr.label(
+            allow_single_file = [".js"],
+        ),
+        "deps": attr.label_list(
+            providers = [_JavaScriptInfo],
+        ),
+    },
+    provides = [_BabelConfigInfo],
+)
+
+# }}}
 
 # region Repository Rules {{{
 

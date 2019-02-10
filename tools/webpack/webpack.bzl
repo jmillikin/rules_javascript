@@ -98,7 +98,20 @@ def webpack_register_toolchains(version = _LATEST):
 
 # region Build Rules {{{
 
-def _webpack_bundle(ctx):
+_WEBPACK_CONFIG = """
+const path = require("path");
+let resolve_aliases = {};
+CONFIG.resolve_aliases.forEach(item => {
+    resolve_aliases[item[0]] = path.resolve(process.cwd(), item[1]);
+});
+module.exports = {
+    mode: CONFIG.webpack_mode,
+    output: { path: process.cwd() },
+    resolve: { alias: resolve_aliases },
+};
+"""
+
+def _webpack(ctx):
     node_toolchain = ctx.attr._node_toolchain[_node_common.ToolchainInfo]
     webpack_toolchain = ctx.attr._webpack_toolchain[webpack_common.ToolchainInfo]
 
@@ -107,82 +120,40 @@ def _webpack_bundle(ctx):
     else:
         webpack_mode = "development"
 
-    transitive_deps = depset()
-    for dep in ctx.attr.deps:
-        dep = dep[_JavaScriptInfo]
-        transitive_deps += depset([dep])
-        transitive_deps += dep.transitive_deps
+    js_deps = [dep[_JavaScriptInfo] for dep in ctx.attr.deps]
+    dep_modules = []
+    for dep in js_deps:
+        dep_modules += dep.transitive_modules
 
-    seen_modules = {}
-    seen_srcs = {}
-    module_paths = []
-    direct_deps = []
-    transitive_srcs = []
-    for src in ctx.files.srcs:
-        seen_srcs[src.path] = True
-        direct_deps.append([
-            src.path,
-            [dep[_JavaScriptInfo].module_name for dep in ctx.attr.deps],
-        ])
-    for dep in transitive_deps:
-        if dep.module_name in seen_modules:
-            # TODO: include the old name, new name, and labels of the responsible rules
-            fail("Duplicate module name {}".format(repr(dep.module_name)))
-        seen_modules[dep.module_name] = dep
-        if dep.src.path in seen_srcs:
-            # TODO: include the old name, new name, and labels of the responsible rules
-            fail("Duplicate source file {}".format(repr(dep.src.path)))
-        seen_srcs[dep.src.path] = True
-    for module_name in sorted(seen_modules):
-        dep = seen_modules[module_name]
-        module_paths.append([module_name, dep.src.path])
-        direct_deps.append([dep.src.path, [subdep.module_name for subdep in dep.direct_deps]])
-
-    transitive_srcs = depset(ctx.files.srcs + [
-        dep.src
-        for dep in transitive_deps
-    ])
-
-    out = ctx.actions.declare_file(ctx.attr.name + ".bundle.js")
-    config_js = ctx.actions.declare_file("_webpack/{}/config.js".format(ctx.attr.name))
-    inputs = node_toolchain.files + webpack_toolchain.files + transitive_srcs + depset([config_js])
-    outputs = [out]
-
-    config = struct(
-        webpack_mode = webpack_mode,
-        bazel_input_paths = [src.path for src in ctx.files.srcs],
-        bazel_output_path = out.path,
-        module_paths = module_paths,
-        direct_deps = direct_deps,
+    webpack_config_file = ctx.actions.declare_file("_webpack/{}/config.js".format(ctx.attr.name))
+    ctx.actions.write(
+        webpack_config_file,
+        "const CONFIG = {};".format(struct(
+            webpack_mode = webpack_mode,
+            resolve_aliases = [[mod.name, mod.source.path] for mod in dep_modules],
+        ).to_json()) + _WEBPACK_CONFIG,
     )
-    ctx.actions.expand_template(
-        template = ctx.file._config_tmpl,
-        output = config_js,
-        substitutions = {
-            "{CONFIG_JSON}": config.to_json(),
-        },
+    webpack_config = webpack_common.WebpackConfigInfo(
+        webpack_config_file = webpack_config_file,
+        files = depset(
+            direct = [webpack_config_file],
+            transitive = [mod.files for mod in dep_modules],
+        ),
     )
 
-    argv = ctx.actions.args()
-    argv.add_all([
-        "--",
-        webpack_toolchain.webpack_executable.path,
-        "--config=" + config_js.path,
-    ])
-    argv.add_all(ctx.attr.webpack_options)
-
-    ctx.actions.run(
-        inputs = inputs,
-        outputs = outputs,
-        executable = node_toolchain.node_executable,
-        arguments = [argv],
-        mnemonic = "Webpack",
-        progress_message = "Webpack {}".format(ctx.label),
+    webpack_out = ctx.actions.declare_file(ctx.attr.name + ".bundle.js")
+    webpack_common.bundle(
+        ctx.actions,
+        webpack_toolchain = webpack_toolchain,
+        webpack_config = webpack_config,
+        entries = ctx.files.srcs,
+        output_file = webpack_out,
+        webpack_arguments = ctx.attr.webpack_options,
     )
-    return DefaultInfo(files = depset(outputs))
+    return DefaultInfo(files = depset(direct = [webpack_out]))
 
-webpack_bundle = rule(
-    _webpack_bundle,
+webpack = rule(
+    _webpack,
     attrs = {
         "srcs": attr.label_list(
             allow_files = [".js"],
