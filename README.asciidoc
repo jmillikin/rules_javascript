@@ -1,0 +1,52 @@
+= Bazel build rules for Javascript
+
+== Overview
+
+[source,python]
+----
+http_archive(
+    name = "rules_javascript",
+    urls = [ ... ],
+    sha256 = " ... ",
+)
+
+load("@rules_javascript//javascript:repositories.bzl", "rules_javascript_toolchains")
+
+rules_javascript_toolchains()
+----
+
+[source,python]
+----
+load("@rules_javascript//javascript:javascript.bzl", "js_binary", "js_library")
+
+js_library(
+    name = "greetings",
+    srcs = ["greetings.js"],
+)
+
+js_binary(
+    name = "hello",
+    src = "hello.js",
+    deps = [":hello_lib"],
+)
+----
+
+== Toolchains
+
+[source,python]
+----
+load(
+    "@rules_javascript//javascript:javascript.bzl",
+    "JAVASCRIPT_TOOLCHAIN_TYPE",
+    "javascript_toolchain",
+)
+
+def _my_rule(ctx):
+    js = javascript_toolchain(ctx)
+    # ...
+
+my_rule = rule(
+    _my_rule,
+    toolchains = [JAVASCRIPT_TOOLCHAIN_TYPE],
+)
+----
