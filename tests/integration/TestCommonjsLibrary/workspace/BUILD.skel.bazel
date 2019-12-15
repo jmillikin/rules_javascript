@@ -1,0 +1,23 @@
+load("@rules_javascript//javascript:javascript.bzl", "js_binary", "js_library")
+
+js_library(
+    name = "hello_impl_lib",
+    srcs = ["hello_impl.js"],
+    format = "commonjs",
+    visibility = ["//:__subpackages__"],
+)
+
+js_binary(
+    name = "hello",
+    src = "main.js",
+    format = "commonjs",
+    main = "main",
+    deps = ["//lib:hello_lib"],
+)
+
+genrule(
+    name = "hello_genrule",
+    outs = ["hello_out.txt"],
+    cmd = "$(location :hello) > $@",
+    tools = [":hello"],
+)

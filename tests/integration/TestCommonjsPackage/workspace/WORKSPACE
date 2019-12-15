@@ -1,0 +1,9 @@
+
+load("@rules_javascript//yarn:yarn.bzl", "yarn_archives", "yarn_register_toolchains")
+
+yarn_register_toolchains("1.19.1")
+
+yarn_archives(
+    name = "typescript_archives",
+    lockfiles = ["//third_party/typescript:yarn.lock"],
+)

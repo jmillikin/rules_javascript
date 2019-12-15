@@ -1,0 +1,12 @@
+load("@rules_javascript//yarn:yarn.bzl", "yarn_install")
+
+licenses(["notice"]) # Apache-2.0
+
+yarn_install(
+    name = "yarn_installed",
+    archives = ["@typescript_archives"],
+    package_json = ":package.json",
+    yarn_lock = ":yarn.lock",
+    visibility = ["//visibility:public"],
+    packages = ["typescript"],
+)

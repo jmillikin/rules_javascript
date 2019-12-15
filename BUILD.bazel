@@ -1,0 +1,10 @@
+filegroup(
+    name = "all_srcs",
+    srcs = [
+        "WORKSPACE",
+        "BUILD.bazel",
+        "//javascript:all_srcs",
+        "//yarn:all_srcs",
+    ],
+    visibility = ["//:__subpackages__"],
+)

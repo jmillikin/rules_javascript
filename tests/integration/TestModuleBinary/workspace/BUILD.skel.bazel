@@ -1,0 +1,15 @@
+load("@rules_javascript//javascript:javascript.bzl", "js_binary")
+
+js_binary(
+    name = "hello",
+    src = "hello.js",
+    format = "module",
+    main = "main",
+)
+
+genrule(
+    name = "hello_genrule",
+    outs = ["hello_out.txt"],
+    cmd = "$(location :hello) > $@",
+    tools = [":hello"],
+)

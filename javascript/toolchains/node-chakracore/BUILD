@@ -1,0 +1,32 @@
+load("@rules_javascript//javascript/internal/node:versions.bzl", "NODE_CHAKRACORE_VERSION_URLS")
+load("@rules_javascript//javascript/internal:toolchain.bzl", "JAVASCRIPT_TOOLCHAIN_TYPE")
+
+filegroup(
+    name = "all_srcs",
+    srcs = glob(["**/*"]),
+    visibility = ["//:__subpackages__"],
+)
+
+[toolchain(
+    name = "v{}/x86_64-linux".format(version),
+    exec_compatible_with = [
+        "@bazel_tools//platforms:linux",
+        "@bazel_tools//platforms:x86_64",
+        "//javascript/constraints/engine:chakracore",
+        "//javascript/constraints/runtime:node",
+    ],
+    toolchain = "@rules_javascript//javascript/internal/toolchains:node-chakracore/v{}/x86_64-linux".format(version),
+    toolchain_type = JAVASCRIPT_TOOLCHAIN_TYPE,
+) for version in NODE_CHAKRACORE_VERSION_URLS]
+
+[toolchain(
+    name = "v{}/x86_64-darwin".format(version),
+    exec_compatible_with = [
+        "@bazel_tools//platforms:osx",
+        "@bazel_tools//platforms:x86_64",
+        "//javascript/constraints/engine:chakracore",
+        "//javascript/constraints/runtime:node",
+    ],
+    toolchain = "@rules_javascript//javascript/internal/toolchains:node-chakracore/v{}/x86_64-darwin".format(version),
+    toolchain_type = JAVASCRIPT_TOOLCHAIN_TYPE,
+) for version in NODE_CHAKRACORE_VERSION_URLS]

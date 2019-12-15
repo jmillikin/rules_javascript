@@ -1,21 +1,27 @@
-# Copyright 2019 the rules_javascript authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# SPDX-License-Identifier: Apache-2.0
+JsInfo = provider(
+    doc = "",
+    fields = {
+        "packages": "map from package name to JsPackageInfo",
+        "modules": "map from module name to JsModuleInfo",
+        "direct_deps": "",
+        "transitive_deps": "",
+        "direct_files": "",
+        "transitive_files": "",
+    },
+)
 
-JavaScriptInfo = provider(fields = ["direct_sources", "transitive_sources", "direct_modules", "transitive_modules"])
+JsPackageInfo = provider(
+    doc = "",
+    fields = {
+        "root": "File of a directory containing this package",
+        "format": "either 'module' or 'commonjs'",
+    },
+)
 
-JavaScriptModuleInfo = provider(fields = ["name", "files", "source"])
-
-NodeModulesInfo = provider()
+JsModuleInfo = provider(
+    doc = "",
+    fields = {
+        "file": "File of the module",
+        "format": "either 'module' or 'commonjs'",
+    },
+)

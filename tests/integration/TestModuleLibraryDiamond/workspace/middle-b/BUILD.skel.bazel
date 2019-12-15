@@ -1,0 +1,9 @@
+load("@rules_javascript//javascript:javascript.bzl", "js_library")
+
+js_library(
+    name = "middle",
+    srcs = ["middle.js"],
+    format = "module",
+    visibility = ["//:__subpackages__"],
+    deps = ["//lower-b:lower"],
+)
